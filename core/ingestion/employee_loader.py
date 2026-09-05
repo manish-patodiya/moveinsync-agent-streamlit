@@ -38,6 +38,7 @@ def load_employee_legs(data_dir: Path) -> tuple[pd.DataFrame, int]:
     df["trip_date"] = parse_datetime(df["trip_date"]).dt.normalize()
     df["shift_type"] = normalize_category(df["shift_type"])
     df["boarding_status"] = normalize_category(df["boarding_status"])
+    df["not_boarding_reason"] = normalize_category(df["not_boarding_reason"])
     df["planned_km"] = clean_non_negative_numeric(df["planned_km"])
     df["traveled_km"] = clean_non_negative_numeric(df["traveled_km"])
     df["planned_pickup_ts"] = epoch_to_timestamp(df["planned_pickup_epoch"])
@@ -61,6 +62,7 @@ def load_employee_legs(data_dir: Path) -> tuple[pd.DataFrame, int]:
             "trip_date",
             "shift_type",
             "boarding_status",
+            "not_boarding_reason",
             "is_no_show",
             "planned_km",
             "traveled_km",

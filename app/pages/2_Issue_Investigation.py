@@ -9,7 +9,14 @@ import pandas as pd
 import streamlit as st
 
 from app import require_service
-from app.ui import ISSUE_ICON, severity_chip, source_chip, status_chip
+from app.ui import (
+    ISSUE_ICON,
+    render_benchmarks,
+    role_chip,
+    severity_chip,
+    source_chip,
+    status_chip,
+)
 
 st.set_page_config(page_title="Issue Investigation · Mobility Pulse", page_icon="🔍", layout="wide")
 st.title("Issue Investigation")
@@ -44,6 +51,7 @@ cols[3].metric("Data confidence", issue.data_confidence)
 scope = {k: v for k, v in issue.business_scope.items() if v}
 if scope:
     st.caption(" · ".join(f"**{k.replace('_', ' ').title()}:** {v}" for k, v in scope.items()))
+render_benchmarks(issue)
 
 evidence_col, context_col = st.columns(2)
 with evidence_col:
@@ -99,8 +107,18 @@ else:
     st.markdown(f"**Operational read.** {output.operational_interpretation}")
     st.warning(f"**Urgency.** {output.urgency_reason}")
     st.markdown("**Recommended next steps**")
-    for step in output.recommended_actions:
-        st.markdown(f"- {step}")
+    if output.role_recommendations:
+        for item in output.role_recommendations:
+            st.markdown(
+                f"{role_chip(item.role)} &nbsp; **{item.action}**  \n"
+                f"{item.rationale}  \n"
+                f":grey[Owner: {item.owner} · Outcome: {item.expected_outcome} · "
+                f"Monitor: {item.monitoring_condition}]",
+                unsafe_allow_html=True,
+            )
+    else:
+        for step in output.recommended_actions:
+            st.markdown(f"- {step}")
     if reasoning.fallback_reason:
         st.caption(f"Template fallback used because: {reasoning.fallback_reason}")
     st.caption(output.caveat or f"Data confidence: {issue.data_confidence}")

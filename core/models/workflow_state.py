@@ -13,6 +13,7 @@ from core.models.output_schemas import ReasoningResult
 class AnalysisFilters(BaseModel):
     business_unit: str | None = None
     office: str | None = None
+    shift: str | None = None
     start_date: date
     end_date: date
 

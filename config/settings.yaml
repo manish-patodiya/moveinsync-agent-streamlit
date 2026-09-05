@@ -2,7 +2,7 @@ app:
   name: "Mobility Pulse"
   default_business_unit: null
   default_period_days: 7
-  max_issues_for_reasoning: 5
+  max_issues_for_reasoning: 2
 
 automation:
   auto_create_manager_alerts: true

@@ -1,5 +1,7 @@
 punctuality:
   min_eligible_trips: 20
+  prior_period_min_trips: 20
+  peer_min_groups: 2
   ota_sla_gap_pct_points: 5
   vendor_peer_gap_pct_points: 5
   vendor_baseline_gap_pct_points: 5

@@ -1,7 +1,7 @@
 from core.models.evidence import Evidence
 from core.models.issue import CandidateIssue, IssueType, Severity
 from core.reason.llm_provider import describe_llm, get_llm
-from core.reason.reasoning_service import reason_about_issue
+from core.reason.reasoning_service import reason_about_issue, template_reasoning
 
 
 def _issue() -> CandidateIssue:
@@ -48,3 +48,26 @@ def test_unknown_provider_falls_back_to_template(monkeypatch):
     result = reason_about_issue(_issue(), ["coverage caveat"])
     assert result.source == "template"
     assert result.output.recommended_action_types == ["CREATE_MANAGER_ALERT"]
+
+
+def test_template_reasoning_is_role_specific_and_cites_evidence():
+    issue = _issue().model_copy(
+        update={
+            "comparisons": {
+                "sla_target_pct": 90,
+                "prior_period_ota_pct": 82,
+                "prior_period_delta_pp": -12,
+                "peer_median_ota_pct": 85,
+                "peer_rank": 4,
+                "peer_count": 5,
+            }
+        }
+    )
+    output = template_reasoning(issue)
+    assert {item.role for item in output.role_recommendations} == {
+        "TRANSPORT_MANAGER",
+        "SHIFT_MANAGER",
+    }
+    assert "prior-period OTA 82%" in output.manager_summary
+    assert output.evidence_citations == ["OTA: 70.0"]
+    assert all(item.expected_outcome for item in output.role_recommendations)

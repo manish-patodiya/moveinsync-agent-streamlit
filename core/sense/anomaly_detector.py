@@ -8,7 +8,20 @@ import duckdb
 from core.models.evidence import Evidence
 from core.models.issue import CandidateIssue, IssueType, Severity
 from core.models.workflow_state import AnalysisFilters
-from core.sense.kpis import filter_sql
+from core.sense.benchmarks import (
+    ota_scope_benchmark,
+    period_kpis,
+    prior_period_dates,
+    prior_period_filters,
+)
+from core.sense.kpis import RECORDED_DELAY_REASON, filter_sql
+
+
+def _delay_reason_evidence(rows: list[tuple[Any, int]]) -> Evidence:
+    return Evidence(
+        label="Top recorded delay reasons",
+        value=", ".join(f"{reason} ({n})" for reason, n in rows) or "None recorded on late trips",
+    )
 
 
 def _id(kind: str, scope: str, filters: AnalysisFilters) -> str:
@@ -49,40 +62,44 @@ def detect_vendor_ota_breaches(
             WHERE {where}
             GROUP BY vendor_id, business_unit, office
         )
-        SELECT *, AVG(ota) OVER (PARTITION BY business_unit, office) peer_ota
-        FROM vendor
+        SELECT v.*,
+               (SELECT MEDIAN(p.ota) FROM vendor p
+                WHERE p.business_unit = v.business_unit
+                  AND p.office = v.office
+                  AND p.vendor_id <> v.vendor_id
+                  AND p.eligible >= ?) peer_ota
+        FROM vendor v
         WHERE eligible >= ? AND vendor_id IS NOT NULL
         ORDER BY ota
         """,
-        [*params, int(cfg["min_eligible_trips"])],
+        [
+            *params,
+            int(cfg["min_eligible_trips"]),
+            int(cfg["min_eligible_trips"]),
+        ],
     ).fetchall()
     issues: list[CandidateIssue] = []
     for vendor, bu, office, eligible, _on_time, late, affected, ota, peer in rows:
         sla_gap = target - float(ota)
-        peer_gap = float(peer) - float(ota)
+        peer_gap = float(peer) - float(ota) if peer is not None else 0
         if sla_gap < float(cfg["ota_sla_gap_pct_points"]) and peer_gap < float(
             cfg["vendor_peer_gap_pct_points"]
         ):
             continue
-        baseline_params: list[Any] = [filters.start_date, vendor]
-        baseline_clauses = ["trip_date < ?", "vendor_id = ?", "is_ota_eligible"]
-        if filters.business_unit:
-            baseline_clauses.append("business_unit = ?")
-            baseline_params.append(filters.business_unit)
-        if filters.office:
-            baseline_clauses.append("office = ?")
-            baseline_params.append(filters.office)
-        baseline = con.execute(
-            f"""
-            SELECT 100.0 * COUNT(*) FILTER (WHERE is_on_time) / NULLIF(COUNT(*), 0)
-            FROM mobility_trip_360 WHERE {' AND '.join(baseline_clauses)}
-            """,
-            baseline_params,
-        ).fetchone()[0]
+        benchmark = ota_scope_benchmark(
+            con,
+            filters,
+            column="vendor_id",
+            value=str(vendor),
+            min_trips=int(cfg["prior_period_min_trips"]),
+            min_peers=int(cfg["peer_min_groups"]),
+        )
+        baseline = benchmark["prior_period_ota_pct"]
         reasons = con.execute(
             f"""
             SELECT delay_reason, COUNT(*) n FROM mobility_trip_360
             WHERE {where} AND vendor_id = ? AND is_ota_eligible AND NOT is_on_time
+              AND {RECORDED_DELAY_REASON}
             GROUP BY delay_reason ORDER BY n DESC LIMIT 3
             """,
             [*params, vendor],
@@ -105,8 +122,7 @@ def detect_vendor_ota_breaches(
                 current_value=round(float(ota), 2),
                 comparisons={
                     "sla_target_pct": target,
-                    "peer_ota_pct": round(float(peer), 2),
-                    "historical_baseline_pct": None if baseline is None else round(float(baseline), 2),
+                    **benchmark,
                 },
                 affected_trip_count=int(late),
                 affected_employee_count=int(affected),
@@ -114,7 +130,27 @@ def detect_vendor_ota_breaches(
                     Evidence(label="Eligible trips", value=int(eligible)),
                     Evidence(label="Late trips", value=int(late)),
                     Evidence(label="OTA", value=round(float(ota), 2), comparison=f"SLA {target}%"),
-                    Evidence(label="Top delay reasons", value=", ".join(f"{r or 'UNKNOWN'} ({n})" for r, n in reasons)),
+                    Evidence(
+                        label="Prior-period OTA",
+                        value=baseline if baseline is not None else "Unavailable",
+                        comparison=(
+                            f"{benchmark['prior_period_start']} to "
+                            f"{benchmark['prior_period_end']}; "
+                            f"n={benchmark['prior_period_eligible_trips']}"
+                        ),
+                    ),
+                    Evidence(
+                        label="Peer median OTA",
+                        value=(
+                            benchmark["peer_median_ota_pct"]
+                            if benchmark["peer_median_ota_pct"] is not None
+                            else "Unavailable"
+                        ),
+                        comparison=(
+                            f"rank {benchmark['peer_rank']} of {benchmark['peer_count']}"
+                        ),
+                    ),
+                    _delay_reason_evidence(reasons),
                 ],
                 data_confidence="HIGH" if eligible >= 2 * int(cfg["min_eligible_trips"]) else "MEDIUM",
                 allowed_action_types=["CREATE_MANAGER_ALERT", "DRAFT_VENDOR_ESCALATION_EMAIL"],
@@ -147,6 +183,45 @@ def detect_vendor_ota_breaches(
         ).fetchall()
         for scope_value, eligible, ota, late, affected in grouped:
             gap = target - float(ota)
+            if column:
+                benchmark = ota_scope_benchmark(
+                    con,
+                    filters,
+                    column=column,
+                    value=str(scope_value),
+                    min_trips=int(cfg["prior_period_min_trips"]),
+                    min_peers=int(cfg["peer_min_groups"]),
+                )
+            else:
+                prior = period_kpis(con, prior_period_filters(filters))
+                prior_start, prior_end = prior_period_dates(filters)
+                prior_ota = prior["ota_pct"]
+                benchmark = {
+                    "current_eligible_trips": int(eligible),
+                    "prior_period_start": str(prior_start),
+                    "prior_period_end": str(prior_end),
+                    "prior_period_eligible_trips": prior["eligible_trips"],
+                    "prior_period_ota_pct": prior_ota,
+                    "prior_period_delta_pp": (
+                        None if prior_ota is None else round(float(ota) - float(prior_ota), 2)
+                    ),
+                    "peer_median_ota_pct": None,
+                    "peer_delta_pp": None,
+                    "peer_rank": None,
+                    "peer_count": 0,
+                    "peer_group": "No peer group for overall scope",
+                }
+            scope_clause = f"AND {column} = ?" if column else ""
+            reason_params = [*params, *([scope_value] if column else [])]
+            reasons = con.execute(
+                f"""
+                SELECT delay_reason, COUNT(*) n FROM mobility_trip_360
+                WHERE {where} {scope_clause} AND is_ota_eligible AND NOT is_on_time
+                  AND {RECORDED_DELAY_REASON}
+                GROUP BY delay_reason ORDER BY n DESC LIMIT 3
+                """,
+                reason_params,
+            ).fetchall()
             issues.append(
                 CandidateIssue(
                     issue_id=_id(f"OTA-{label}", str(scope_value), filters),
@@ -156,13 +231,36 @@ def detect_vendor_ota_breaches(
                     business_scope=_scope(filters, **{label: str(scope_value)}),
                     current_metric="trip_end_ota_pct",
                     current_value=round(float(ota), 2),
-                    comparisons={"sla_target_pct": target},
+                    comparisons={"sla_target_pct": target, **benchmark},
                     affected_trip_count=int(late),
                     affected_employee_count=int(affected),
                     evidence=[
                         Evidence(label="Eligible trips", value=int(eligible)),
                         Evidence(label="Late trips", value=int(late)),
                         Evidence(label="OTA", value=round(float(ota), 2), comparison=f"SLA {target}%"),
+                        Evidence(
+                            label="Prior-period OTA",
+                            value=(
+                                benchmark["prior_period_ota_pct"]
+                                if benchmark["prior_period_ota_pct"] is not None
+                                else "Unavailable"
+                            ),
+                            comparison=(
+                                f"{benchmark['prior_period_start']} to "
+                                f"{benchmark['prior_period_end']}; "
+                                f"n={benchmark['prior_period_eligible_trips']}"
+                            ),
+                        ),
+                        Evidence(
+                            label="Peer median OTA",
+                            value=(
+                                benchmark["peer_median_ota_pct"]
+                                if benchmark["peer_median_ota_pct"] is not None
+                                else "Unavailable"
+                            ),
+                            comparison=f"rank {benchmark['peer_rank']} of {benchmark['peer_count']}",
+                        ),
+                        _delay_reason_evidence(reasons),
                     ],
                     data_confidence="HIGH" if eligible >= 2 * int(cfg["min_eligible_trips"]) else "MEDIUM",
                     allowed_action_types=["CREATE_MANAGER_ALERT"],
@@ -211,8 +309,9 @@ def detect_safety_escalations(
         stale_open, nc_trips,
         employees, critical_trips, trip_count,
     ) = map(int, row)
-    baseline_clauses = ["trip_date < ?"]
-    baseline_params: list[Any] = [filters.start_date]
+    prior_start, prior_end = prior_period_dates(filters)
+    baseline_clauses = ["trip_date BETWEEN ? AND ?"]
+    baseline_params: list[Any] = [prior_start, prior_end]
     if filters.business_unit:
         baseline_clauses.append("business_unit = ?")
         baseline_params.append(filters.business_unit)
@@ -261,6 +360,9 @@ def detect_safety_escalations(
                 "max_open_alert_minutes": max_open,
                 "historical_alert_rate": None if baseline_rate is None else round(baseline_rate, 4),
                 "alert_rate_multiplier": None if multiplier is None else round(multiplier, 2),
+                "prior_period_start": str(prior_start),
+                "prior_period_end": str(prior_end),
+                "prior_period_trip_count": int(baseline_row[1]),
             },
             affected_trip_count=critical_trips if critical_trips else trip_count,
             affected_employee_count=employees,
@@ -342,12 +444,13 @@ def detect_billing_anomalies(
     ).fetchall()
     for vendor, n, cpk, median in rows:
         gap = 100.0 * (float(cpk) - float(median)) / float(median) if median else 0
+        prior_start, prior_end = prior_period_dates(filters)
         baseline_clauses = [
-            "trip_date < ?",
+            "trip_date BETWEEN ? AND ?",
             "COALESCE(billing_vendor, vendor_id) = ?",
             "billed_km > 0",
         ]
-        baseline_params: list[Any] = [filters.start_date, vendor]
+        baseline_params: list[Any] = [prior_start, prior_end, vendor]
         if filters.business_unit:
             baseline_clauses.append("business_unit = ?")
             baseline_params.append(filters.business_unit)
@@ -383,6 +486,9 @@ def detect_billing_anomalies(
                     "peer_gap_pct": round(gap, 2),
                     "historical_cost_per_km": None if baseline[0] is None else round(float(baseline[0]), 2),
                     "historical_gap_pct": None if baseline_gap is None else round(baseline_gap, 2),
+                    "prior_period_start": str(prior_start),
+                    "prior_period_end": str(prior_end),
+                    "prior_period_billed_trips": int(baseline[1]),
                 },
                 affected_trip_count=int(n),
                 evidence=[

@@ -11,14 +11,15 @@ import streamlit as st
 
 from app import require_service
 from app.ui import severity_chip
-from core.models.action import Action, ActionStatus, ActionType
+from core.act.action_policy import build_live_alert_action
+from core.models.action import Action, ActionType
 from core.models.live_alert import AlertActivity, AlertPriority, LiveAlert
 
 st.set_page_config(page_title="Live Alerts · Mobility Pulse", page_icon="🚨", layout="wide")
 st.title("🚨 Live Alert Management")
 st.caption(
-    "A session-only demo watcher replays five synthetic, unacknowledged alerts. "
-    "Source CSV alerts are read-only and shown alongside them."
+    "A demo watcher replays five synthetic, unacknowledged alerts. Source data stays "
+    "read-only; requested responses enter the persistent approval queue."
 )
 service = require_service()
 
@@ -60,6 +61,15 @@ def record(alert: LiveAlert, action: str, detail: str) -> None:
     )
 
 
+def enqueue(action: Action, alert: LiveAlert, detail: str) -> None:
+    actions = st.session_state.setdefault("actions", [])
+    if not any(existing.action_id == action.action_id for existing in actions):
+        actions.append(action)
+        service.save_actions([action])
+    record(alert, "PROPOSE", detail)
+    st.toast("Action proposed for approval")
+
+
 def acknowledge(alert: LiveAlert, detail: str = "Acknowledged by transport manager") -> None:
     updated = alert.model_copy(
         update={
@@ -78,8 +88,24 @@ def call_contact(alert: LiveAlert, role: str) -> None:
     st.markdown(f"**{contact.display_name}**")
     st.markdown(f"### {contact.masked_phone}")
     if st.button("Record simulated call", type="primary", width="stretch"):
-        record(alert, f"CALL_{role.upper()}", f"Simulated call to {contact.display_name}")
-        st.toast("Simulated call recorded")
+        action_type = (
+            ActionType.REQUEST_DRIVER_CALL
+            if role == "driver"
+            else ActionType.REQUEST_EMPLOYEE_CALL
+        )
+        enqueue(
+            build_live_alert_action(
+                alert,
+                action_type,
+                call_script=(
+                    f"Confirm identity using approved operations procedure. Ask for current "
+                    f"trip status, safety condition and required assistance for trip {alert.trip_id}. "
+                    "Record the response; do not disclose other employee details."
+                ),
+            ),
+            alert,
+            f"Simulated call to {contact.display_name} awaiting approval",
+        )
         st.rerun()
 
 
@@ -102,25 +128,15 @@ def escalate_alert(alert: LiveAlert) -> None:
     st.caption(f"{badge} · {draft_result.source_detail}")
     subject = st.text_input("Subject", draft_result.draft.subject, key=f"alert-subject-{key}")
     body = st.text_area("Body", draft_result.draft.body, height=260, key=f"alert-body-{key}")
-    st.warning("Approve & Simulate Send records the action locally and acknowledges the alert.")
-    if st.button("Approve & Simulate Send", type="primary", width="stretch"):
-        acknowledge(alert, "Acknowledged through simulated escalation")
-        action = Action(
-            action_id=f"live-{alert.event_id}",
-            issue_id=alert.event_id,
-            action_type=ActionType.DRAFT_ALERT_ESCALATION_EMAIL,
-            priority=str(alert.priority),
-            title=f"Safety escalation: {alert.event_type} · trip {alert.trip_id}",
-            rationale=f"Escalated {alert.severity} alert for manager/vendor review.",
-            requires_human_approval=True,
-            status=ActionStatus.SIMULATED_SENT,
+    st.warning("The draft will enter Actions and Audit as PROPOSED. Nothing is sent here.")
+    if st.button("Propose escalation", type="primary", width="stretch"):
+        action = build_live_alert_action(
+            alert,
+            ActionType.DRAFT_ALERT_ESCALATION_EMAIL,
             email_subject=subject,
             email_body=body,
         )
-        actions = st.session_state.setdefault("actions", [])
-        if not any(existing.action_id == action.action_id for existing in actions):
-            actions.append(action)
-        record(alert, "ESCALATE", "Email approved and simulated as sent")
+        enqueue(action, alert, "Escalation email awaiting approval")
         st.rerun()
 
 
@@ -149,7 +165,7 @@ if controls[1].button(
     st.rerun()
 controls[2].caption(
     "When started, one new synthetic alert arrives every 5 seconds. "
-    "The feed and your actions reset when the Streamlit session ends."
+    "The feed resets with the Streamlit session; proposed actions remain in Actions and Audit."
 )
 
 
@@ -228,7 +244,11 @@ for alert in visible:
         if "ACKNOWLEDGE" in alert.allowed_actions and buttons[0].button(
             "Acknowledge", key=f"ack-{alert.event_id}", width="stretch"
         ):
-            acknowledge(alert)
+            enqueue(
+                build_live_alert_action(alert, ActionType.ACKNOWLEDGE_ALERT),
+                alert,
+                "Alert acknowledgement awaiting approval",
+            )
             st.rerun()
         if "ESCALATE" in alert.allowed_actions and buttons[1].button(
             "Escalate", key=f"esc-{alert.event_id}", width="stretch"

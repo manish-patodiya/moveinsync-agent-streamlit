@@ -49,8 +49,9 @@ if run_clicked:
             result = service.run(filters, progress=st.write)
             status.update(label="Agent run complete", state="complete", expanded=False)
         st.session_state["pulse_result"] = result
-        st.session_state["actions"] = result["actions"]
-        st.session_state["audit_trail"] = []
+        service.save_actions(result["actions"])
+        st.session_state["actions"] = service.saved_actions()
+        st.session_state["audit_trail"] = service.action_audit()
 
 result = st.session_state.get("pulse_result")
 if not result:
@@ -75,7 +76,11 @@ row = st.columns(4)
 row[0].metric(
     "Trip-end OTA",
     f"{ota}%" if ota is not None else "N/A",
-    delta=None if ota is None or target is None else f"{round(ota - target, 2)} vs SLA",
+    delta=(
+        f"{kpi['ota_delta_pp']} pp vs {kpi['prior_period_start']}–{kpi['prior_period_end']}"
+        if kpi.get("ota_delta_pp") is not None
+        else None if ota is None or target is None else f"{round(ota - target, 2)} pp vs SLA"
+    ),
     delta_color="normal",
 )
 row[1].metric("Trips analysed", f"{kpi.get('trip_count', 0):,}")

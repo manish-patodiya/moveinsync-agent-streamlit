@@ -44,7 +44,7 @@ if "copilot_thread_id" not in st.session_state:
 if "copilot_history" not in st.session_state:
     st.session_state.copilot_history = restore(st.session_state.copilot_thread_id)
 if "actions" not in st.session_state:
-    st.session_state.actions = []
+    st.session_state.actions = service.saved_actions()
 if "audit_trail" not in st.session_state:
     st.session_state.audit_trail = []
 
@@ -55,7 +55,12 @@ with st.sidebar:
         "- Trip safety alerts\n"
         "- Alert report\n"
         "- OTA report\n"
-        "- SLA breach report"
+        "- SLA breach report\n"
+        "- Vendor / office / shift comparison\n"
+        "- Delays and no-shows\n"
+        "- Feedback and utilization\n"
+        "- Billing and impacted trips\n"
+        "- Approval-gated action preparation"
     )
     st.caption("Checkpoints persist in DuckDB, so this thread survives a restart.")
     st.code(st.session_state.copilot_thread_id, language=None)
@@ -86,7 +91,9 @@ def decide(action_id: str, requested: ActionStatus) -> None:
     for index, action in enumerate(st.session_state.actions):
         if action.action_id != action_id:
             continue
-        updated, event = service.transition_action(action, requested)
+        updated, event = service.transition_action(
+            action, requested, actor_role=action.owner_role, note="Copilot decision"
+        )
         st.session_state.actions[index] = updated
         st.session_state.audit_trail.append(event)
         st.rerun()
@@ -104,12 +111,23 @@ def render_result(result, index: int) -> None:
         else "`DETERMINISTIC SUMMARY`"
     )
     st.caption(f"{route_badge} · {answer_badge}")
+    if result.plan:
+        with st.expander(
+            f"Agent plan · {len(result.plan.steps)} read step(s)"
+            + (" · action approval required" if result.plan.requires_approval else ""),
+            expanded=len(result.plan.steps) > 1,
+        ):
+            st.markdown(f"**Goal:** {result.plan.goal}")
+            for step in result.plan.steps:
+                st.markdown(f"{step.step}. `{step.tool}` — {step.purpose}")
     if result.interpretation:
         st.caption(f"↳ {result.interpretation}")
     st.markdown(result.answer)
     if result.grounded_summary and result.grounded_summary != result.answer:
-        with st.expander("Verified figures behind this answer", expanded=False):
-            st.markdown(result.grounded_summary)
+        with st.container(border=True):
+            st.markdown("**Verified figures behind this answer**")
+            for summary in result.evidence_summaries or [result.grounded_summary]:
+                st.markdown(summary)
             st.caption(
                 "Computed in SQL before the model wrote the answer above. If the two "
                 "disagree, trust this one."
@@ -125,11 +143,14 @@ def render_result(result, index: int) -> None:
             mime="text/csv",
             key=f"download-{index}",
         )
-    if result.proposed_action:
-        action = current_action(result.proposed_action.action_id)
+    proposed = result.proposed_actions or (
+        [result.proposed_action] if result.proposed_action else []
+    )
+    for proposed_action in proposed:
+        action = current_action(proposed_action.action_id)
         if action is None:
-            st.session_state.actions.append(result.proposed_action)
-            action = result.proposed_action
+            st.session_state.actions.append(proposed_action)
+            action = proposed_action
         with st.container(border=True):
             st.markdown(
                 f"{status_chip(str(action.status))} &nbsp; "
@@ -138,7 +159,7 @@ def render_result(result, index: int) -> None:
             )
             st.caption(action.rationale)
             st.caption("Human-in-the-loop: this action does nothing until you approve it.")
-            buttons = st.columns(2)
+            buttons = st.columns(3)
             if buttons[0].button(
                 "Approve",
                 key=f"chat-approve-{index}-{action.action_id}",
@@ -153,6 +174,20 @@ def render_result(result, index: int) -> None:
                 width="stretch",
             ):
                 decide(action.action_id, ActionStatus.REJECTED)
+            completion = (
+                ActionStatus.SIMULATED_SENT
+                if action.email_subject
+                else ActionStatus.SIMULATED_COMPLETED
+            )
+            if buttons[2].button(
+                "Simulate execution",
+                key=f"chat-execute-{index}-{action.action_id}",
+                disabled=action.status != ActionStatus.APPROVED,
+                width="stretch",
+            ):
+                decide(action.action_id, completion)
+    if proposed:
+        st.page_link("pages/3_Actions_and_Audit.py", label="Open unified Actions and Audit →")
 
 
 for index, message in enumerate(st.session_state.copilot_history):
@@ -162,7 +197,7 @@ for index, message in enumerate(st.session_state.copilot_history):
         else:
             st.markdown(message["content"])
 
-question = st.chat_input("Ask about trips, alerts, OTA or SLA performance…")
+question = st.chat_input("Ask for analysis, comparisons, impacted trips, drafts, calls or follow-up actions…")
 if question:
     st.session_state.copilot_history.append({"role": "user", "content": question})
     with st.chat_message("user"):
