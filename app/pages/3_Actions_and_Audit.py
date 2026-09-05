@@ -92,7 +92,7 @@ for index, action in enumerate(actions):
             width="stretch",
         ):
             transition(index, ActionStatus.REVIEWED)
-        can_send = action.requires_human_approval and action.status == ActionStatus.APPROVED
+        can_send = action.email_subject is not None and action.status == ActionStatus.APPROVED
         if buttons[3].button(
             "Simulate Send",
             key=f"send-{action.action_id}",

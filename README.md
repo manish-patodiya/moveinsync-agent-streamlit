@@ -96,10 +96,53 @@ Reasoning is the slow step on a local model — roughly 10–15 seconds per issu
 - **Issue Investigation:** the deterministic evidence behind a finding, SLA/peer/baseline context, allowed action types, and the manager explanation.
 - **Actions and Audit:** editable drafts plus the approval, review and simulated-send lifecycle.
 - **Data Health:** source coverage, cleaning exceptions, unmatched keys, and grain status.
+- **Live Alerts:** a session-only watcher that replays synthetic unacknowledged alerts,
+  prioritizes them by severity and event type, and exposes fixed acknowledge/escalate/call
+  controls. Contact details are deliberately masked synthetic demo data.
+- **Operations Copilot:** a checkpointed chat interface over five curated, parameterized
+  read-only tools: trip lookup, trip safety alerts, alerts, OTA, and SLA breaches. Results
+  can be downloaded as CSV and action recommendations enter the existing human approval
+  lifecycle.
 
 Every run records a trace per node (status, duration, what it did), so the Sense → Reason → Act path is visible in the UI rather than hidden in logs. Each issue card is badged with whether the explanation came from the LLM or the deterministic template.
 
 Sense detects configured punctuality breaches (overall/vendor/office/shift), critical safety events, and billing anomalies. Numeric KPIs and severity rules are always deterministic. Only the top configured high/critical issues are sent to Reason.
+
+### Alert demo behavior
+
+`alerts_data.csv` is historical, so Phase 1 does not claim it is a live event source. The
+Live Alerts page replays five synthetic events into Streamlit session state at five-second
+intervals. Acknowledgement, escalation and calls are also session-only simulations:
+
+- Acknowledge records a local timestamp.
+- Escalate asks `qwen:14b` for a draft from alert and trip context, then **Approve &
+  Simulate Send** records it locally and acknowledges the alert.
+- Call Driver / Call Employee displays a masked dummy number and records a simulated call.
+
+No source CSV is modified and no message or call leaves the application.
+
+### Copilot safety model
+
+The model is never a database agent. It cannot generate arbitrary SQL, mutate DuckDB, or
+access raw employee-leg records. Each question runs a three-node graph:
+
+1. **Route.** Explicit wording is classified by deterministic rules, so a question naming a
+   trip ID and the word "safety" always reads that trip's alerts. The LLM is consulted only
+   for questions the rules cannot classify, and an unclassifiable follow-up stays on the
+   trip from the previous turn. Explicit periods, trip IDs and filters extracted from the
+   text always override whatever the model returned.
+2. **Query.** Application code runs fixed parameterized SQL for the chosen `ChatTool` and
+   computes the verified summary.
+3. **Answer.** The LLM writes the reply from the question plus those verified rows. It is
+   told the row ordering, forbidden from computing new figures, and cannot contradict the
+   summary. Each reply shows the verified figures alongside it; without a reachable LLM the
+   deterministic summary is the answer.
+
+Conversation checkpoints are written to `.mobility_pulse/chat_memory.duckdb` by a DuckDB
+implementation of LangGraph's `BaseCheckpointSaver`, so a thread keeps its context across a
+restart. The published `langgraph-checkpoint-duckdb` package is not used because it pins an
+incompatible `langgraph-checkpoint`. Any recommended action is created as `PROPOSED` and
+must be approved or rejected by the manager.
 
 ## Automatic action booleans (`config/settings.yaml`)
 
