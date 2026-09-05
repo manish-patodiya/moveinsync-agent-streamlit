@@ -28,9 +28,10 @@ STATUS_COLOR = {
 
 STAGE_LABEL = {
     "bootstrap": ("Data", "CSV → DuckDB, grain invariant checked"),
-    "sense_node": ("Sense", "Deterministic DuckDB SQL detects anomalies"),
-    "reason_node": ("Reason", "Evidence explained in manager language"),
-    "act_node": ("Act", "Fixed policy creates simulated actions"),
+    "sensing_node": ("Sense", "Deterministic DuckDB SQL flags suspicious signals only"),
+    "benchmark_node": ("Benchmark", "Agent: every culprit vendor vs. peer, SLA and trend"),
+    "root_cause_node": ("Root Cause", "Agent: ranks vendors by negative impact"),
+    "escalation_advisor_node": ("Escalation Advisor", "Agent: drafts escalation + action per vendor"),
     "daily_brief_node": ("Brief", "Manager summary assembled"),
 }
 
@@ -85,7 +86,10 @@ def render_agent_timeline(trace: list) -> None:
         column.caption(f":grey[{purpose}]")
 
 
-def render_issue_card(issue, result, *, key_prefix: str = "") -> None:
+TREND_ICON = {"WORSENING": "🔴", "IMPROVING": "🟢", "FLAT": "⚪"}
+
+
+def render_issue_card(issue, result, benchmarks=None, attributions=None, *, key_prefix: str = "") -> None:
     icon = ISSUE_ICON.get(str(issue.issue_type), "•")
     with st.container(border=True):
         header, metric = st.columns([4, 1])
@@ -110,7 +114,29 @@ def render_issue_card(issue, result, *, key_prefix: str = "") -> None:
         if result is not None:
             st.markdown(f"**Why it matters:** {result.output.manager_summary}")
             st.markdown(f"**Recommended:** {'; '.join(result.output.recommended_actions)}")
+
+        if attributions:
+            st.markdown("**Culprit vendors, ranked by negative impact**")
+            benchmark_by_vendor = {b.vendor_id: b for b in (benchmarks or [])}
+            for attribution in attributions:
+                benchmark = benchmark_by_vendor.get(attribution.vendor_id)
+                trend_badge = TREND_ICON.get(benchmark.trend_direction, "⚪") if benchmark else ""
+                value_bit = (
+                    f" · {benchmark.metric.replace('_', ' ')} {benchmark.current_value}"
+                    if benchmark and benchmark.current_value is not None
+                    else ""
+                )
+                st.markdown(
+                    f"{trend_badge} **#{attribution.impact_rank} {attribution.vendor_id}** "
+                    f"— impact score {attribution.impact_score}{value_bit} "
+                    f"({benchmark.trend_direction.lower() if benchmark else 'no trend data'})"
+                )
+                for factor in attribution.primary_factors:
+                    st.caption(f"↳ {factor}")
+
         with st.expander("Evidence used by Sense"):
+            if issue.sense_evidence_summary:
+                st.markdown(issue.sense_evidence_summary)
             for item in issue.evidence:
                 suffix = f" — {item.comparison}" if item.comparison else ""
                 st.markdown(f"- **{item.label}:** {item.value}{suffix}")

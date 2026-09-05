@@ -106,7 +106,50 @@ else:
     st.caption(output.caveat or f"Data confidence: {issue.data_confidence}")
 
 st.divider()
-st.markdown("#### Actions proposed by Act")
+st.markdown("#### Benchmark & Root Cause — who are the culprit vendors")
+benchmarks = result.get("benchmark_outputs", {}).get(issue.issue_id, [])
+attributions = result.get("root_cause_outputs", {}).get(issue.issue_id, [])
+if not attributions:
+    st.caption(
+        "Benchmark and Root Cause only run on high/critical issues, so this one was left to "
+        "the daily brief."
+    )
+else:
+    benchmark_by_vendor = {b.vendor_id: b for b in benchmarks}
+    st.caption(
+        "Ranked by negative impact (affected trips/employees, gap severity, trend), not raw "
+        "metric value alone."
+    )
+    st.dataframe(
+        pd.DataFrame(
+            [
+                {
+                    "Rank": a.impact_rank,
+                    "Vendor": a.vendor_id,
+                    "Impact score": a.impact_score,
+                    "Metric": benchmark_by_vendor[a.vendor_id].metric
+                    if a.vendor_id in benchmark_by_vendor
+                    else "—",
+                    "Current": benchmark_by_vendor[a.vendor_id].current_value
+                    if a.vendor_id in benchmark_by_vendor
+                    else None,
+                    "Peer": benchmark_by_vendor[a.vendor_id].peer_value
+                    if a.vendor_id in benchmark_by_vendor
+                    else None,
+                    "Trend": benchmark_by_vendor[a.vendor_id].trend_direction
+                    if a.vendor_id in benchmark_by_vendor
+                    else "—",
+                    "Contributing factors": "; ".join(a.primary_factors) or "—",
+                }
+                for a in attributions
+            ]
+        ),
+        hide_index=True,
+        width="stretch",
+    )
+
+st.divider()
+st.markdown("#### Actions proposed by Escalation Advisor")
 actions = [a for a in st.session_state.get("actions", []) if a.issue_id == issue.issue_id]
 if not actions:
     st.caption("No action was generated for this issue under the current automation settings.")
@@ -117,6 +160,8 @@ for action in actions:
             unsafe_allow_html=True,
         )
         st.caption(action.rationale)
+        if action.target_vendor_id:
+            st.caption(f"Targets **{action.target_vendor_id}** (impact rank #{action.impact_rank}).")
         if action.requires_human_approval:
             st.caption("Requires your approval before a simulated send.")
 st.page_link("pages/3_Actions_and_Audit.py", label="Go to Actions and Audit →")

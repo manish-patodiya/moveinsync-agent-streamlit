@@ -1,5 +1,6 @@
 from core.act.action_policy import create_actions
 from core.models.action import ActionType
+from core.models.benchmark import VendorAttribution
 from core.models.evidence import Evidence
 from core.models.issue import CandidateIssue, IssueType, Severity
 from core.reason.reasoning_service import template_reasoning
@@ -59,3 +60,53 @@ def test_action_policy_has_no_external_send_path():
     )
     assert actions[0].status == "PROPOSED"
     assert not hasattr(actions[0], "recipient_address")
+
+
+def test_root_cause_outputs_fan_out_to_one_action_per_culprit_vendor():
+    issue = _issue()
+    attributions = [
+        VendorAttribution(vendor_id="Vendor A", impact_rank=1, impact_score=100.0, primary_factors=["f1"]),
+        VendorAttribution(vendor_id="Vendor B", impact_rank=2, impact_score=50.0, primary_factors=["f2"]),
+    ]
+    actions = create_actions(
+        [issue],
+        {issue.issue_id: template_reasoning(issue)},
+        {"auto_create_manager_alerts": True, "auto_create_email_drafts": True},
+        root_cause_outputs={issue.issue_id: attributions},
+    )
+    vendor_actions = [a for a in actions if a.action_type == ActionType.DRAFT_VENDOR_ESCALATION_EMAIL]
+    assert {a.target_vendor_id for a in vendor_actions} == {"Vendor A", "Vendor B"}
+    assert all(a.requires_human_approval for a in vendor_actions)
+    assert {a.target_vendor_id: a.impact_rank for a in vendor_actions} == {"Vendor A": 1, "Vendor B": 2}
+
+
+def test_max_escalation_targets_caps_vendor_fan_out():
+    issue = _issue()
+    attributions = [
+        VendorAttribution(vendor_id=f"Vendor {i}", impact_rank=i, impact_score=100.0 - i, primary_factors=[])
+        for i in range(1, 6)
+    ]
+    actions = create_actions(
+        [issue],
+        {issue.issue_id: template_reasoning(issue)},
+        {"auto_create_manager_alerts": False, "auto_create_email_drafts": True},
+        root_cause_outputs={issue.issue_id: attributions},
+        max_escalation_targets=2,
+    )
+    vendor_actions = [a for a in actions if a.action_type == ActionType.DRAFT_VENDOR_ESCALATION_EMAIL]
+    assert len(vendor_actions) == 2
+    assert {a.target_vendor_id for a in vendor_actions} == {"Vendor 1", "Vendor 2"}
+
+
+def test_no_root_cause_output_falls_back_to_single_generic_draft():
+    """Backward-compatible: when Root Cause found no culprit vendors, keep the old behavior
+    of one generic issue-level draft rather than producing zero actions."""
+    issue = _issue()
+    actions = create_actions(
+        [issue],
+        {issue.issue_id: template_reasoning(issue)},
+        {"auto_create_manager_alerts": False, "auto_create_email_drafts": True},
+    )
+    vendor_actions = [a for a in actions if a.action_type == ActionType.DRAFT_VENDOR_ESCALATION_EMAIL]
+    assert len(vendor_actions) == 1
+    assert vendor_actions[0].target_vendor_id is None

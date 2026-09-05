@@ -3,6 +3,7 @@ from __future__ import annotations
 from typing import Any, TypedDict
 
 from core.models.action import Action
+from core.models.benchmark import VendorAttribution, VendorBenchmark
 from core.models.issue import CandidateIssue
 from core.models.output_schemas import ReasoningResult
 from core.models.workflow_state import AnalysisFilters, TraceEvent
@@ -14,6 +15,9 @@ class WorkflowState(TypedDict):
     kpi_summary: dict[str, Any]
     candidate_issues: list[CandidateIssue]
     prioritized_issues: list[CandidateIssue]
+    sense_summary: str
+    benchmark_outputs: dict[str, list[VendorBenchmark]]
+    root_cause_outputs: dict[str, list[VendorAttribution]]
     reasoning_outputs: dict[str, ReasoningResult]
     actions: list[Action]
     daily_brief: str

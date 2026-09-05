@@ -1,0 +1,15 @@
+benchmark:
+  max_vendors_per_issue: 5
+  min_trips_per_vendor: 5
+  trend_periods: 6
+  trend_period_days: 7
+  trend_slope_flat_threshold: 0.5
+
+impact_weights:
+  affected_trips: 1.0
+  affected_employees: 0.5
+  gap_severity: 2.0
+  trend_slope: 1.0
+
+escalation:
+  max_targets_per_issue: 3

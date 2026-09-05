@@ -15,6 +15,7 @@ build/
 
 # Generated reports
 SENSE_REASON_ACT_PIPELINE_REPORT.md
+SENSE_REASON_ACT_REDESIGN_PROPOSAL.md
 
 # Local data files (large CSVs, not committed)
 data/*.csv

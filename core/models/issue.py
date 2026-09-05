@@ -36,4 +36,6 @@ class CandidateIssue(BaseModel):
     evidence: list[Evidence]
     data_confidence: str
     allowed_action_types: list[str]
+    sense_evidence_summary: str | None = None
+    culprit_vendor_ids: list[str] = Field(default_factory=list)
     metadata: dict[str, Any] = Field(default_factory=dict, exclude=True)

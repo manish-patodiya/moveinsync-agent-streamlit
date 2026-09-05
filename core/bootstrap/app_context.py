@@ -32,6 +32,7 @@ class AppContext:
     sla: dict[str, Any]
     thresholds: dict[str, Any]
     quality_rules: dict[str, Any]
+    impact_scoring: dict[str, Any]
     data_health: DataHealthReport
     data_dir: Path
 
@@ -71,6 +72,7 @@ def bootstrap(
 ) -> AppContext:
     data_dir = data_dir or DEFAULT_DATA_DIR
     settings, sla, thresholds, quality_rules = load_configs(config_dir)
+    impact_scoring = load_yaml(config_dir / "impact_scoring.yaml")
     missing = _missing_sources(data_dir)
     if missing:
         raise BootstrapError(
@@ -120,6 +122,7 @@ def bootstrap(
         sla=sla,
         thresholds=thresholds,
         quality_rules=quality_rules,
+        impact_scoring=impact_scoring,
         data_health=health,
         data_dir=data_dir,
     )

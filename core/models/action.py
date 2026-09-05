@@ -36,6 +36,8 @@ class Action(BaseModel):
     owner_role: str = "TRANSPORT_MANAGER"
     requires_human_approval: bool
     status: ActionStatus = ActionStatus.PROPOSED
+    target_vendor_id: str | None = None
+    impact_rank: int | None = None
     email_subject: str | None = None
     email_body: str | None = None
     created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))

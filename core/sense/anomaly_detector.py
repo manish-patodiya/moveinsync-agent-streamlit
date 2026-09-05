@@ -8,6 +8,7 @@ import duckdb
 from core.models.evidence import Evidence
 from core.models.issue import CandidateIssue, IssueType, Severity
 from core.models.workflow_state import AnalysisFilters
+from core.sense.evidence_summary import summarize_issue_evidence
 from core.sense.kpis import filter_sql
 
 
@@ -94,6 +95,19 @@ def detect_vendor_ota_breaches(
             >= float(cfg["vendor_baseline_gap_pct_points"])
         ):
             severity = Severity.HIGH
+        confidence = "HIGH" if eligible >= 2 * int(cfg["min_eligible_trips"]) else "MEDIUM"
+        # A marginal MEDIUM-confidence gap is noise, not a suspicious signal: only promote it
+        # to a flagged issue once it clears the configured threshold by more than a cushion.
+        worst_gap = max(sla_gap, peer_gap)
+        min_threshold = min(
+            float(cfg["ota_sla_gap_pct_points"]), float(cfg["vendor_peer_gap_pct_points"])
+        )
+        if (
+            severity == Severity.MEDIUM
+            and confidence == "MEDIUM"
+            and worst_gap < min_threshold + float(cfg["marginal_cushion_pct_points"])
+        ):
+            continue
         issues.append(
             CandidateIssue(
                 issue_id=_id("OTA", str(vendor), filters),
@@ -116,10 +130,32 @@ def detect_vendor_ota_breaches(
                     Evidence(label="OTA", value=round(float(ota), 2), comparison=f"SLA {target}%"),
                     Evidence(label="Top delay reasons", value=", ".join(f"{r or 'UNKNOWN'} ({n})" for r, n in reasons)),
                 ],
-                data_confidence="HIGH" if eligible >= 2 * int(cfg["min_eligible_trips"]) else "MEDIUM",
+                data_confidence=confidence,
                 allowed_action_types=["CREATE_MANAGER_ALERT", "DRAFT_VENDOR_ESCALATION_EMAIL"],
             )
         )
+    # A vendor already flagged on its own explains most of a dimension rollup; suppress the
+    # rollup as a duplicate signal rather than flagging the same root cause twice.
+    flagged_vendors = {
+        issue.business_scope.get("vendor") for issue in issues if issue.business_scope.get("vendor")
+    }
+    dedupe_share = float(cfg["dimension_dedupe_share_pct"]) / 100.0
+
+    def _explained_by_flagged_vendor(column: str | None, scope_value: object, late: int) -> bool:
+        if not late or not flagged_vendors:
+            return False
+        extra_clause = f"AND {column} = ?" if column else ""
+        extra_params = [*params, scope_value] if column else list(params)
+        top = con.execute(
+            f"""
+            SELECT vendor_id, COUNT(*) FILTER (WHERE is_ota_eligible AND NOT is_on_time) late
+            FROM mobility_trip_360 WHERE {where} {extra_clause}
+            GROUP BY vendor_id ORDER BY late DESC LIMIT 1
+            """,
+            extra_params,
+        ).fetchone()
+        return bool(top) and top[0] in flagged_vendors and (top[1] / late) >= dedupe_share
+
     dimensions = [("overall", None)]
     if not filters.office:
         dimensions.append(("office", "office"))
@@ -146,6 +182,8 @@ def detect_vendor_ota_breaches(
             [*params, int(cfg["min_eligible_trips"]), target - float(cfg["ota_sla_gap_pct_points"])],
         ).fetchall()
         for scope_value, eligible, ota, late, affected in grouped:
+            if _explained_by_flagged_vendor(column, scope_value, int(late)):
+                continue
             gap = target - float(ota)
             issues.append(
                 CandidateIssue(
@@ -367,13 +405,18 @@ def detect_billing_anomalies(
             else None
         )
         threshold = float(cfg["cost_per_km_peer_gap_pct"])
-        if gap <= threshold and (baseline_gap is None or baseline_gap <= threshold):
+        worst_gap = max(gap, baseline_gap or 0)
+        if worst_gap <= threshold:
+            continue
+        # cost/km confidence is always MEDIUM (no sample-size tiering); a gap that only just
+        # clears the threshold is noise, not a suspicious signal.
+        if worst_gap < threshold + float(cfg["marginal_cushion_pct"]):
             continue
         issues.append(
             CandidateIssue(
                 issue_id=_id("BILL-CPK", str(vendor), filters),
                 issue_type=IssueType.BILLING_ANOMALY,
-                severity=Severity.HIGH if max(gap, baseline_gap or 0) >= 50 else Severity.MEDIUM,
+                severity=Severity.HIGH if worst_gap >= 50 else Severity.MEDIUM,
                 title=f"Billing cost/km anomaly: {vendor}",
                 business_scope=_scope(filters, vendor=vendor),
                 current_metric="cost_per_billed_km",
@@ -413,5 +456,7 @@ def detect_anomalies(
         *detect_safety_escalations(con, filters, sla, thresholds),
         *detect_billing_anomalies(con, filters, thresholds),
     ]
+    for issue in issues:
+        issue.sense_evidence_summary = summarize_issue_evidence(issue)
     rank = {Severity.CRITICAL: 0, Severity.HIGH: 1, Severity.MEDIUM: 2, Severity.LOW: 3}
     return sorted(issues, key=lambda issue: (rank[issue.severity], -issue.affected_trip_count))

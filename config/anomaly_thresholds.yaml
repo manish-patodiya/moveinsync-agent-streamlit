@@ -3,6 +3,8 @@ punctuality:
   ota_sla_gap_pct_points: 5
   vendor_peer_gap_pct_points: 5
   vendor_baseline_gap_pct_points: 5
+  dimension_dedupe_share_pct: 60
+  marginal_cushion_pct_points: 2
 
 safety:
   sev1_is_critical: true
@@ -14,6 +16,7 @@ cost:
   min_billed_trips: 10
   cost_per_km_peer_gap_pct: 25
   zero_km_positive_cost_is_high: true
+  marginal_cushion_pct: 5
 
 quality:
   min_timestamp_coverage_pct: 80

@@ -2,7 +2,7 @@
 
 Streamlit prototype for a transport manager. The app loads fixed CSVs from `data/` into an in-memory DuckDB database, then runs a LangGraph workflow:
 
-**Sense** (deterministic SQL) → **Reason** (LLM or templates on aggregated evidence only) → **Act** (programmed, simulated actions) → **Daily Brief**.
+**Sense** (deterministic SQL, flags suspicious signals only) → **Benchmark** (every candidate vendor vs. peer, SLA and multi-period trend) → **Root Cause** (ranks vendors by negative impact, attaches contributing factors) → **Escalation Advisor** (LLM explanation + per-culprit-vendor draft, fixed action policy) → **Daily Brief**.
 
 Email and alert actions are simulated in this prototype; no real external message is sent.
 
@@ -18,13 +18,14 @@ flowchart TD
     aggs --> m360
     m360 --> graph["LangGraph"]
     graph --> sense[Sense]
-    sense --> reason[Reason]
-    reason --> act[Act]
-    act --> brief[Daily Brief]
+    sense --> benchmark[Benchmark]
+    benchmark --> rootcause[Root Cause]
+    rootcause --> escalation[Escalation Advisor]
+    escalation --> brief[Daily Brief]
     graph --> ui[Streamlit dashboard]
 ```
 
-Sense never calls an LLM. Reason receives only structured issue evidence — never raw CSV rows, employee IDs, or unaggregated records. Act applies a fixed policy; “automatic email” means generate and mark a simulated draft, not SMTP/Gmail/Teams.
+Sense never calls an LLM — it only flags a signal once it clears a confidence-gated threshold, and suppresses a dimension-level rollup (office/shift/overall) when a single already-flagged vendor already explains most of it. Benchmark and Root Cause are also deterministic, tool-driven agent nodes (see `core/benchmark/tools.py` and `core/root_cause/tools.py`): every vendor in an issue's business_unit/office cohort is benchmarked against its peers and its own multi-period trend, then ranked by a reproducible negative-impact score — never an LLM's judgment call. Escalation Advisor is the only node that calls an LLM, and only to explain evidence it's given and draft an escalation per top-impact vendor — it never invents a number. Act's policy is fixed; "automatic email" means generate and mark a simulated draft, not SMTP/Gmail/Teams.
 
 ## One-row-per-trip grain
 
@@ -77,7 +78,7 @@ PYTHONPATH=. python -m core.bootstrap.app_context
 
 ## Environment variables
 
-Copy `.env.example` to `.env`. Reason reads only these, and `core/reason/llm_provider.py` is the single place an LLM is constructed:
+Copy `.env.example` to `.env`. Escalation Advisor reads only these, and `core/reason/llm_provider.py` is the single place an LLM is constructed:
 
 | Variable | Purpose |
 |---|---|
@@ -100,15 +101,15 @@ ollama pull qwen:14b
 ollama serve
 ```
 
-Structured output is enforced via each provider's JSON-schema constrained decoding, so the model must return a valid `IssueReasoningOutput`. If the provider is unreachable, the model misbehaves, or validation fails, Reason falls back to deterministic templates and the UI labels which path produced each explanation. Raw trip rows and employee identifiers are never sent to the model.
+Structured output is enforced via each provider's JSON-schema constrained decoding, so the model must return a valid `IssueReasoningOutput`. If the provider is unreachable, the model misbehaves, or validation fails, Escalation Advisor falls back to deterministic templates and the UI labels which path produced each explanation. Raw trip rows and employee identifiers are never sent to the model.
 
-Reasoning latency depends on the selected provider — a local Ollama model runs roughly 10–15 seconds per issue, while Groq's hosted inference is typically faster. `app.max_issues_for_reasoning` in `config/settings.yaml` caps how many issues are explained per run.
+Reasoning latency depends on the selected provider — a local Ollama model runs roughly 10–15 seconds per issue, while Groq's hosted inference is typically faster. `app.max_issues_for_reasoning` in `config/settings.yaml` caps how many issues are explained per run; `config/impact_scoring.yaml` caps how many vendors get benchmarked per issue and how many top-impact vendors get their own escalation draft.
 
 ## Dashboard
 
-- **Command Centre:** filters, an agent run timeline showing what each node did, KPI cards, an issue-type breakdown, and the issues split into "Agent focus" (reasoned and actioned) versus "All detected".
-- **Issue Investigation:** the deterministic evidence behind a finding, SLA/peer/baseline context, allowed action types, and the manager explanation.
-- **Actions and Audit:** editable drafts plus the approval, review and simulated-send lifecycle.
+- **Command Centre:** filters, an agent run timeline showing what each node did, a Sense evidence-summary paragraph, KPI cards, an issue-type breakdown, and the issues split into "Agent focus" (reasoned and actioned) versus "All detected" (with a Culprit vendors column).
+- **Issue Investigation:** the deterministic evidence behind a finding, SLA/peer/baseline context, allowed action types, the Benchmark & Root Cause vendor ranking (impact score, trend, contributing factors), and the manager explanation.
+- **Actions and Audit:** editable drafts plus the approval, review and simulated-send lifecycle; vendor-targeted actions show which vendor and impact rank they're addressed to.
 - **Data Health:** source coverage, cleaning exceptions, unmatched keys, and grain status.
 - **Live Alerts:** a session-only watcher that replays synthetic unacknowledged alerts,
   prioritizes them by severity and event type, and exposes fixed acknowledge/escalate/call
@@ -118,9 +119,9 @@ Reasoning latency depends on the selected provider — a local Ollama model runs
   can be downloaded as CSV and action recommendations enter the existing human approval
   lifecycle.
 
-Every run records a trace per node (status, duration, what it did), so the Sense → Reason → Act path is visible in the UI rather than hidden in logs. Each issue card is badged with whether the explanation came from the LLM or the deterministic template.
+Every run records a trace per node (status, duration, what it did), so the Sense → Benchmark → Root Cause → Escalation Advisor path is visible in the UI rather than hidden in logs. Each issue card is badged with whether the explanation came from the LLM or the deterministic template.
 
-Sense detects configured punctuality breaches (overall/vendor/office/shift), critical safety events, and billing anomalies. Numeric KPIs and severity rules are always deterministic. Only the top configured high/critical issues are sent to Reason.
+Sense detects configured punctuality breaches (overall/vendor/office/shift), critical safety events, and billing anomalies, but only once they clear a confidence-gated threshold — marginal MEDIUM-confidence gaps and dimension-level rollups already explained by an independently flagged vendor are suppressed rather than surfaced as noise. Numeric KPIs and severity rules are always deterministic. Only the top configured high/critical issues are escalated past Sense. Benchmark then enumerates every vendor in that issue's business_unit/office cohort (not just the one named in the issue) and computes each vendor's peer comparison and a multi-period trend; Root Cause ranks them by a deterministic negative-impact score and attaches contributing factors (delay-reason mix, shift concentration, compliance flags); Escalation Advisor explains the issue and drafts one escalation per top-impact culprit vendor.
 
 ### Alert demo behavior
 
@@ -161,7 +162,7 @@ must be approved or rejected by the manager.
 ## Automatic action booleans (`config/settings.yaml`)
 
 - `auto_create_manager_alerts`: create an in-app manager alert for high/critical issues.
-- `auto_create_email_drafts`: create an email **draft** for eligible vendor/safety issues (not a real send).
+- `auto_create_email_drafts`: create an email **draft** for eligible vendor/safety issues (not a real send) — one per top-impact culprit vendor Root Cause identified (`impact_scoring.yaml: escalation.max_targets_per_issue`), or a single generic draft if none were found.
 - `auto_mark_approved_actions_simulated_sent`: if true, an approved draft can move to `SIMULATED_SENT` automatically; if false, it stays `APPROVED` until the manager presses Simulate Send.
 
 Emails always require human approval before `SIMULATED_SENT`.

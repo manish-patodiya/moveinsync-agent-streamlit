@@ -53,9 +53,10 @@ for index, action in enumerate(actions):
     with st.container(border=True):
         head, badge = st.columns([5, 1])
         head.markdown(f"**{action.title}**")
-        head.caption(
-            f"{action.action_type} · priority {action.priority} · owner {action.owner_role}"
-        )
+        caption = f"{action.action_type} · priority {action.priority} · owner {action.owner_role}"
+        if action.target_vendor_id:
+            caption += f" · targets {action.target_vendor_id} (impact rank #{action.impact_rank})"
+        head.caption(caption)
         badge.markdown(status_chip(str(action.status)), unsafe_allow_html=True)
         st.markdown(action.rationale)
 

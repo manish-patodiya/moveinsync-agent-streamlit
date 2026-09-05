@@ -88,6 +88,8 @@ row[2].metric("Safety alerts", f"{kpi.get('safety_alerts', 0):,}")
 row[3].metric("Billed cost", f"{kpi.get('total_billed_cost', 0):,.0f}")
 
 st.info(f"**Daily brief** — {result['daily_brief']}")
+if result.get("sense_summary"):
+    st.caption(f"🔎 **Sense evidence summary** — {result['sense_summary']}")
 
 if issues:
     st.markdown("#### Where the problems are")
@@ -122,7 +124,12 @@ with tab_focus:
     if not result["prioritized_issues"]:
         st.success("Nothing reached the high or critical threshold in this period.")
     for issue in result["prioritized_issues"]:
-        render_issue_card(issue, result["reasoning_outputs"].get(issue.issue_id))
+        render_issue_card(
+            issue,
+            result["reasoning_outputs"].get(issue.issue_id),
+            result.get("benchmark_outputs", {}).get(issue.issue_id),
+            result.get("root_cause_outputs", {}).get(issue.issue_id),
+        )
 
 with tab_all:
     if not issues:
@@ -156,6 +163,7 @@ with tab_all:
                     "Value": issue.current_value,
                     "Trips": issue.affected_trip_count,
                     "Reasoned": "Yes" if issue.issue_id in reasoned_ids else "No",
+                    "Culprit vendors": ", ".join(issue.culprit_vendor_ids) or "—",
                 }
                 for issue in visible
             ]
