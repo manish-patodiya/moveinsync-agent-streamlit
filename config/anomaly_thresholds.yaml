@@ -1,0 +1,20 @@
+punctuality:
+  min_eligible_trips: 20
+  ota_sla_gap_pct_points: 5
+  vendor_peer_gap_pct_points: 5
+  vendor_baseline_gap_pct_points: 5
+
+safety:
+  sev1_is_critical: true
+  panic_is_critical: true
+  max_open_alert_minutes: 15
+  alert_spike_multiplier: 1.5
+
+cost:
+  min_billed_trips: 10
+  cost_per_km_peer_gap_pct: 25
+  zero_km_positive_cost_is_high: true
+
+quality:
+  min_timestamp_coverage_pct: 80
+  max_invalid_distance_pct: 5

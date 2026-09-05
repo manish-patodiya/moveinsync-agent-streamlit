@@ -1,0 +1,11 @@
+streamlit
+duckdb
+pandas
+pyyaml
+pydantic
+python-dotenv
+langgraph
+langchain-core
+langchain-ollama
+langchain-openai
+pytest

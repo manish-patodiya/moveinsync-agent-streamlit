@@ -1,0 +1,6 @@
+feedback:
+  zero_rating_policy: "exclude_from_average"
+
+data_cleaning:
+  negative_distance_policy: "null_and_flag"
+  invalid_alert_severity_policy: "null_and_flag"

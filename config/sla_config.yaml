@@ -1,0 +1,7 @@
+service_levels:
+  trip_end_ota:
+    target_pct: 90.0
+    allowed_delay_minutes: 10
+  safety_acknowledgement:
+    sev1_target_minutes: 5
+    sev2_target_minutes: 15
