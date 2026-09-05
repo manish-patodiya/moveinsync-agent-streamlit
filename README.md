@@ -56,9 +56,16 @@ No file-upload UI.
 ## Setup
 
 ```bash
+./setup.sh
+```
+
+Creates `.venv`, installs dependencies, and copies `.env.example` to `.env` (without overwriting an existing one). Or do it manually:
+
+```bash
 python -m venv .venv
 source .venv/bin/activate
 pip install -r requirements.txt
+cp .env.example .env
 streamlit run app/streamlit_app.py
 ```
 
@@ -74,21 +81,28 @@ Copy `.env.example` to `.env`. Reason reads only these, and `core/reason/llm_pro
 
 | Variable | Purpose |
 |---|---|
-| `LLM_PROVIDER` | `ollama` (default) or `openai` |
-| `LLM_MODEL` | e.g. `qwen:14b` |
-| `OLLAMA_BASE_URL` | defaults to `http://localhost:11434` |
+| `LLM_PROVIDER` | `groq` (default), `ollama`, or `openai` |
+| `LLM_MODEL` | e.g. `llama-3.3-70b-versatile` (Groq) or `qwen:14b` (Ollama) |
+| `GROQ_API_KEY` | only when `LLM_PROVIDER=groq` |
+| `OLLAMA_BASE_URL` | defaults to `http://localhost:11434`; only used when `LLM_PROVIDER=ollama` |
 | `OPENAI_API_KEY` | only when `LLM_PROVIDER=openai` |
 
-Default local setup:
+Default setup (Groq, hosted):
+
+```bash
+export GROQ_API_KEY=...
+```
+
+To run fully local with Ollama/Qwen instead, set `LLM_PROVIDER=ollama` and `LLM_MODEL=qwen:14b` in `.env`, then:
 
 ```bash
 ollama pull qwen:14b
 ollama serve
 ```
 
-Structured output is enforced with Ollama's JSON-schema constrained decoding, so the model must return a valid `IssueReasoningOutput`. If the provider is unreachable, the model misbehaves, or validation fails, Reason falls back to deterministic templates and the UI labels which path produced each explanation. Raw trip rows and employee identifiers are never sent to the model.
+Structured output is enforced via each provider's JSON-schema constrained decoding, so the model must return a valid `IssueReasoningOutput`. If the provider is unreachable, the model misbehaves, or validation fails, Reason falls back to deterministic templates and the UI labels which path produced each explanation. Raw trip rows and employee identifiers are never sent to the model.
 
-Reasoning is the slow step on a local model — roughly 10–15 seconds per issue. `app.max_issues_for_reasoning` in `config/settings.yaml` caps how many issues are explained per run.
+Reasoning latency depends on the selected provider — a local Ollama model runs roughly 10–15 seconds per issue, while Groq's hosted inference is typically faster. `app.max_issues_for_reasoning` in `config/settings.yaml` caps how many issues are explained per run.
 
 ## Dashboard
 
@@ -115,7 +129,7 @@ Live Alerts page replays five synthetic events into Streamlit session state at f
 intervals. Acknowledgement, escalation and calls are also session-only simulations:
 
 - Acknowledge records a local timestamp.
-- Escalate asks `qwen:14b` for a draft from alert and trip context, then **Approve &
+- Escalate asks the configured LLM for a draft from alert and trip context, then **Approve &
   Simulate Send** records it locally and acknowledges the alert.
 - Call Driver / Call Employee displays a masked dummy number and records a simulated call.
 

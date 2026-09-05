@@ -13,3 +13,9 @@ dist/
 build/
 *.egg-info/
 
+# Generated reports
+SENSE_REASON_ACT_PIPELINE_REPORT.md
+
+# Local data files (large CSVs, not committed)
+data/*.csv
+

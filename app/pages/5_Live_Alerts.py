@@ -13,6 +13,7 @@ from app import require_service
 from app.ui import severity_chip
 from core.models.action import Action, ActionStatus, ActionType
 from core.models.live_alert import AlertActivity, AlertPriority, LiveAlert
+from core.reason.llm_provider import describe_llm
 
 st.set_page_config(page_title="Live Alerts · Mobility Pulse", page_icon="🚨", layout="wide")
 st.title("🚨 Live Alert Management")
@@ -92,8 +93,9 @@ def escalate_alert(alert: LiveAlert) -> None:
             "Generate a manager-ready escalation from the alert and trip context. "
             "Employee identifiers are not sent to the model."
         )
-        if st.button("Generate draft with qwen:14b", type="primary", width="stretch"):
-            with st.spinner("Ollama is drafting the escalation…"):
+        llm_config = describe_llm()
+        if st.button(f"Generate draft with {llm_config['model']}", type="primary", width="stretch"):
+            with st.spinner(f"{str(llm_config['provider']).title()} is drafting the escalation…"):
                 draft_result = service.alert_escalation_draft(alert)
                 st.session_state.alert_drafts[key] = draft_result
     if draft_result is None:

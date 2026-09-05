@@ -7,6 +7,8 @@ from dotenv import load_dotenv
 
 DEFAULT_OLLAMA_MODEL = "qwen:14b"
 DEFAULT_OLLAMA_BASE_URL = "http://localhost:11434"
+DEFAULT_GROQ_MODEL = "llama-3.3-70b-versatile"
+DEFAULT_LLM_PROVIDER = "groq"
 
 
 class LLMProvider(Protocol):
@@ -16,12 +18,18 @@ class LLMProvider(Protocol):
 def describe_llm() -> dict[str, str | bool]:
     """Report the configured provider so the UI can show what Reason will use."""
     load_dotenv()
-    provider = os.getenv("LLM_PROVIDER", "ollama").strip().lower()
+    provider = os.getenv("LLM_PROVIDER", DEFAULT_LLM_PROVIDER).strip().lower()
     if provider == "ollama":
         return {
             "provider": "ollama",
             "model": os.getenv("LLM_MODEL", DEFAULT_OLLAMA_MODEL),
             "available": True,
+        }
+    if provider == "groq":
+        return {
+            "provider": "groq",
+            "model": os.getenv("LLM_MODEL", DEFAULT_GROQ_MODEL),
+            "available": bool(os.getenv("GROQ_API_KEY")),
         }
     if provider == "openai":
         return {
@@ -45,6 +53,10 @@ def get_llm() -> LLMProvider | None:
             base_url=os.getenv("OLLAMA_BASE_URL", DEFAULT_OLLAMA_BASE_URL),
             temperature=0,
         )
+    if config["provider"] == "groq":
+        from langchain_groq import ChatGroq
+
+        return ChatGroq(model=str(config["model"]), temperature=0)
     from langchain_openai import ChatOpenAI
 
     return ChatOpenAI(model=str(config["model"]), temperature=0)

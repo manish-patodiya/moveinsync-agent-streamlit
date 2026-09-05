@@ -8,4 +8,5 @@ langgraph
 langchain-core
 langchain-ollama
 langchain-openai
+langchain-groq
 pytest

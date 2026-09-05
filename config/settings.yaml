@@ -11,5 +11,5 @@ automation:
 
 llm:
   enabled: true
-  provider: "ollama"
+  provider: "groq"
   model_env_key: "LLM_MODEL"
